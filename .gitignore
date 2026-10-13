@@ -1,0 +1,32 @@
+# Go build outputs and local build caches
+*.exe
+*.test
+*.out
+.gocache/
+vendor/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+config.json
+cookies.txt
+
+# Ignore dependency directories
+node_modules/
+
+# Ignore common build artifacts
+dist/
+build/
+*.log
+
+# Ignore OS-specific files
+.DS_Store
+Thumbs.db
+
+# Historical planning notes; keep the implementation and performance docs
+# intended for the public project documentation.
+/docs/checkpoint.txt
+/docs/plan.MD
+/docs/proposal.txt
+/docs/revision.txt
