@@ -1,0 +1,27 @@
+/.git/
+**/.gocache/
+/docs/
+
+# Local secrets and user-specific configuration
+**/.env
+**/.env.*
+!**/.env.example
+**/config.json
+**/cookies.txt
+
+# Local build output and test artifacts
+**/*.exe
+**/*.test
+**/*.out
+**/coverage*
+**/bin/
+**/dist/
+**/build/
+
+# Dependencies that are not part of this Go module's source
+**/node_modules/
+**/vendor/
+
+# Editor and operating-system files
+**/.DS_Store
+**/Thumbs.db
