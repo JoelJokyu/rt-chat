@@ -1,7 +1,9 @@
 package messages
 
-type MessageBroadcaster interface {
-	Broadcast(channelID int64, payload []byte)
+import "context"
+
+type MessagePublisher interface {
+	Publish(ctx context.Context, payload []byte) error
 }
 
 type MessageEvent struct {

@@ -53,7 +53,7 @@ func (c *Client) Close() {
 	})
 }
 
-func (c *Client) ReadLoop(hub *Hub, channelID int64, messageService *messages.MessageService) {
+func (c *Client) ReadLoop(hub *Hub, channelID int64, messageService *messages.MessageService, publisher messages.MessagePublisher) {
 	defer func() {
 		hub.Unregister(channelID, c)
 		c.Close()
@@ -85,7 +85,10 @@ func (c *Client) ReadLoop(hub *Hub, channelID int64, messageService *messages.Me
 			continue
 		}
 
-		hub.Broadcast(channelID, payload)
+		if err := publisher.Publish(ctx, payload); err != nil {
+			// Persistence already succeeded; clients can recover missed live events from history.
+			log.Printf("publish websocket message event: %v", err)
+		}
 	}
 }
 

@@ -18,11 +18,35 @@ services:
     image: rt-chat-api:local
     environment:
       DATABASE_URL: "postgres://rtchat_app:${POSTGRES_PASSWORD}@db:5432/rtchat_dev?sslmode=disable"
+      REDIS_ADDR: redis:6379
     ports:
       - "8080:8080"
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  api2:
+    image: rt-chat-api:local
+    environment:
+      DATABASE_URL: "postgres://rtchat_app:${POSTGRES_PASSWORD}@db:5432/rtchat_dev?sslmode=disable"
+      REDIS_ADDR: redis:6379
+    ports:
+      - "8081:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7.4.11-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
 volumes:
   postgres_data:

@@ -1,6 +1,7 @@
 package messages
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -11,14 +12,14 @@ import (
 )
 
 type MessageHandler struct {
-	service     *MessageService
-	broadcaster MessageBroadcaster
+	service   *MessageService
+	publisher MessagePublisher
 }
 
-func NewMessageHandler(service *MessageService, broadcaster MessageBroadcaster) *MessageHandler {
+func NewMessageHandler(service *MessageService, publisher MessagePublisher) *MessageHandler {
 	return &MessageHandler{
-		service:     service,
-		broadcaster: broadcaster,
+		service:   service,
+		publisher: publisher,
 	}
 }
 
@@ -57,7 +58,7 @@ func (h *MessageHandler) CreateMessageHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	h.broadcastEvent(MessageEvent{
+	h.publishEvent(r.Context(), MessageEvent{
 		Type:      "message.created",
 		ChannelID: message.ChannelID,
 		Message:   message,
@@ -193,7 +194,7 @@ func (h *MessageHandler) UpdateMessageHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	h.broadcastEvent(MessageEvent{
+	h.publishEvent(r.Context(), MessageEvent{
 		Type:      "message.updated",
 		ChannelID: message.ChannelID,
 		Message:   message,
@@ -232,7 +233,7 @@ func (h *MessageHandler) DeleteMessageHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	h.broadcastEvent(MessageEvent{
+	h.publishEvent(r.Context(), MessageEvent{
 		Type:      "message.deleted",
 		ChannelID: message.ChannelID,
 		MessageID: message.ID,
@@ -241,12 +242,16 @@ func (h *MessageHandler) DeleteMessageHandler(w http.ResponseWriter, r *http.Req
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *MessageHandler) broadcastEvent(event MessageEvent) {
+func (h *MessageHandler) publishEvent(ctx context.Context, event MessageEvent) {
 	payload, err := json.Marshal(event)
 	if err != nil {
 		log.Printf("encode message event: %v", err)
 		return
 	}
 
-	h.broadcaster.Broadcast(event.ChannelID, payload)
+	if err := h.publisher.Publish(ctx, payload); err != nil {
+		// The message change is already committed in PostgreSQL. A Pub/Sub
+		// failure means live clients may miss this notification until they fetch history.
+		log.Printf("publish message event: %v", err)
+	}
 }

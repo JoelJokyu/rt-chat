@@ -373,9 +373,13 @@ membership before upgrading: missing/invalid session returns `401 Unauthorized`
 and a non-member returns `403 Forbidden`.
 
 The client sends a text frame whose contents are the message text itself, not
-a JSON object. Each accepted message is stored and broadcast to channel
-clients as JSON. There is no separate client acknowledgment or structured
-error event in the current protocol.
+a JSON object. Each accepted message is stored in PostgreSQL and published
+through Redis Pub/Sub; connected clients receive a JSON event through their
+API instance's local hub. HTTP create, edit, and delete operations publish the
+corresponding event types as well. Delivery is transient: Redis Pub/Sub does
+not replay events missed while disconnected, and a publish failure after the
+database write is logged without undoing the write. There is no separate client
+acknowledgment or structured error event in the current protocol.
 
 Event envelope for creation and update:
 

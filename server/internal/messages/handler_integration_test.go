@@ -96,7 +96,7 @@ func TestMessageHTTPHandlersAndBroadcasts(t *testing.T) {
 	adminToken := createSessionToken(adminID)
 	memberToken := createSessionToken(memberID)
 
-	broadcaster := &recordingMessageBroadcaster{}
+	broadcaster := &recordingMessagePublisher{}
 	service := NewMessageService(NewMessageRepository(pool))
 	handler := NewMessageHandler(service, broadcaster)
 
@@ -223,25 +223,30 @@ type recordedMessageEvent struct {
 	payload   []byte
 }
 
-type recordingMessageBroadcaster struct {
+type recordingMessagePublisher struct {
 	events []recordedMessageEvent
 }
 
-func (b *recordingMessageBroadcaster) Broadcast(channelID int64, payload []byte) {
+func (b *recordingMessagePublisher) Publish(_ context.Context, payload []byte) error {
+	var event MessageEvent
+	if err := json.Unmarshal(payload, &event); err != nil {
+		return err
+	}
 	b.events = append(b.events, recordedMessageEvent{
-		channelID: channelID,
+		channelID: event.ChannelID,
 		payload:   append([]byte(nil), payload...),
 	})
+	return nil
 }
 
-func assertRecordedMessageEvent(t *testing.T, broadcaster *recordingMessageBroadcaster, index int, wantType string, wantChannelID, wantMessageID int64) {
+func assertRecordedMessageEvent(t *testing.T, publisher *recordingMessagePublisher, index int, wantType string, wantChannelID, wantMessageID int64) {
 	t.Helper()
 
-	if index >= len(broadcaster.events) {
-		t.Fatalf("event index %d missing; only %d events recorded", index, len(broadcaster.events))
+	if index >= len(publisher.events) {
+		t.Fatalf("event index %d missing; only %d events recorded", index, len(publisher.events))
 	}
 
-	recorded := broadcaster.events[index]
+	recorded := publisher.events[index]
 	if recorded.channelID != wantChannelID {
 		t.Fatalf("broadcast channel ID = %d; want %d", recorded.channelID, wantChannelID)
 	}

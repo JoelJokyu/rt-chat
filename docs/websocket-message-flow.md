@@ -1,9 +1,10 @@
 # RT Chat WebSocket Message Flow
 
 This document describes the current implementation in
-`server/internal/realtime/` and the message broadcasts initiated by
-`server/internal/messages/`. The hub is in process memory and serves one API
-instance.
+`server/internal/realtime/` and message events initiated by
+`server/internal/messages/`. Each API process has an in-memory hub for its own
+WebSocket connections; Redis Pub/Sub carries events between those process-local
+hubs.
 
 ## 1. Connection and authorization
 
@@ -14,7 +15,7 @@ sequenceDiagram
     participant R as HTTP Router / Auth Middleware
     participant H as WebSocket Handler
     participant DB as PostgreSQL
-    participant Hub as In-process Hub
+    participant Hub as This Process's Hub
     participant W as Client Write Loop
 
     C->>R: GET /channels/{id}/ws + session_id cookie
@@ -55,10 +56,14 @@ sequenceDiagram
     participant Read as Client Read Loop
     participant S as Message Service
     participant DB as PostgreSQL
-    participant Hub as In-process Hub
-    participant Q as Each Connected Client Queue
+    participant Redis as Redis Pub/Sub
+    participant SubA as API A Subscriber
+    participant HubA as API A Local Hub
+    participant SubB as API B Subscriber
+    participant HubB as API B Local Hub
+    participant Q as Connected Client Queue(s)
     participant Write as Each Client Write Loop
-    participant Recipients as Clients in Channel
+    participant Recipients as Clients on Both Instances
 
     C->>Read: Text frame with message content
     Read->>S: Create(channel ID, authenticated user ID, content)
@@ -66,19 +71,27 @@ sequenceDiagram
     DB-->>S: Persisted message
     S-->>Read: Message with database ID and timestamp
     Read->>Read: Encode message.created event as JSON
-    Read->>Hub: Broadcast(channel ID, event bytes)
-    Hub->>Q: Enqueue event for each client in channel
+    Read->>Redis: PUBLISH event JSON
+    par Subscriber on API A (originating process)
+        Redis-->>SubA: Deliver event JSON
+        SubA->>HubA: Broadcast(channel ID, event bytes)
+        HubA->>Q: Enqueue for API A clients in channel
+    and Subscriber on API B (another process)
+        Redis-->>SubB: Deliver event JSON
+        SubB->>HubB: Broadcast(channel ID, event bytes)
+        HubB->>Q: Enqueue for API B clients in channel
+    end
     Q->>Write: Event available on send queue
     Write->>Recipients: WebSocket text frame with JSON event
 ```
 
 ### Ordering and event shape
 
-The message is inserted before the hub broadcasts it. Thus the event contains
+The message is inserted before the event is published. Thus the event contains
 the persisted message ID and timestamp, and a later history request can read
-the message. The sending client is registered in the same channel hub, so it
-receives the broadcast too; that broadcast is the current sender's visible
-confirmation. There is no distinct acknowledgement protocol.
+the message. The sending client receives the event through its API process's
+Redis subscriber like other local clients; the publisher does not separately
+broadcast to the local hub. There is no distinct acknowledgement protocol.
 
 Creation event:
 
@@ -98,13 +111,16 @@ Creation event:
 
 The server currently has no structured WebSocket error event. If message
 creation fails (for example, blank content), the failure is logged and the
-read loop continues; no message event is broadcast and no error response is
-sent to the client.
+read loop continues; no message event is published and no error response is
+sent to the client. If creation succeeds but Redis publication fails, the
+message remains in PostgreSQL, the failure is logged, and connected clients do
+not receive that live event.
 
 ## 3. Message changed over HTTP
 
-HTTP message create, edit, and delete handlers also broadcast to the channel
-hub after the service/repository operation succeeds:
+HTTP message create, edit, and delete handlers publish to Redis after the
+service/repository operation succeeds. Each subscriber then broadcasts to its
+process-local channel hub:
 
 ```mermaid
 sequenceDiagram
@@ -113,7 +129,11 @@ sequenceDiagram
     participant H as Message Handler
     participant S as Message Service
     participant DB as PostgreSQL
-    participant Hub as In-process Hub
+    participant Redis as Redis Pub/Sub
+    participant SubA as API A Subscriber
+    participant HubA as API A Local Hub
+    participant SubB as API B Subscriber
+    participant HubB as API B Local Hub
     participant WS as Connected WebSocket Clients
 
     C->>H: POST /channels/{id}/messages, PATCH /messages/{id}, or DELETE /messages/{id}
@@ -121,8 +141,16 @@ sequenceDiagram
     S->>DB: Insert, update, or soft-delete message
     DB-->>S: Operation result
     S-->>H: Saved message / deleted message ID
-    H->>Hub: Broadcast corresponding JSON event
-    Hub->>WS: Enqueue event for clients in affected channel
+    H->>Redis: Publish corresponding JSON event
+    par API A subscriber
+        Redis-->>SubA: Deliver event
+        SubA->>HubA: Broadcast to local channel clients
+        HubA->>WS: Enqueue event
+    and API B subscriber
+        Redis-->>SubB: Deliver event
+        SubB->>HubB: Broadcast to local channel clients
+        HubB->>WS: Enqueue event
+    end
     H-->>C: HTTP response (201, 200, or 204)
 ```
 
@@ -133,9 +161,12 @@ Events are:
 - `message.deleted`: contains `channel_id` and `message_id`; deletion is a
   soft delete in PostgreSQL.
 
-The event is broadcast before the handler writes the successful HTTP response.
+The event is published before the handler writes the successful HTTP response.
 The HTTP client may itself have a WebSocket connection and therefore receive
-the event as well.
+the event through its API process's Redis subscriber. If Redis publication
+fails after the database operation succeeds, the handler logs the failure and
+still returns the successful HTTP response; the persisted change remains
+available through message history.
 
 ## 4. Disconnects and slow clients
 
@@ -153,8 +184,14 @@ the outbound queue for each connection.
 
 ## Current boundaries
 
-- The hub exists only in the API process's memory. Clients connected to another
-  API instance will not receive its broadcasts.
+- Each hub exists only in its API process's memory. Redis Pub/Sub distributes
+  events so connected clients on other API instances can receive them.
+- Redis Pub/Sub is transient: it does not persist or replay events, and there
+  is no delivery guarantee for disconnected subscribers. PostgreSQL remains
+  the durable message source of truth.
+- If publishing fails after a message write, the failure is logged but the
+  database write is not rolled back. Connected clients can refresh history to
+  observe the saved change.
 - Membership is checked at connection time, not continuously during the
   connection.
 - WebSocket writes are not persisted as a separate event stream; PostgreSQL

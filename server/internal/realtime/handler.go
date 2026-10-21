@@ -15,13 +15,15 @@ type Handler struct {
 	membershipService *memberships.MembershipService
 	messageService    *messages.MessageService
 	hub               *Hub
+	publisher         messages.MessagePublisher
 }
 
-func NewHandler(membershipService *memberships.MembershipService, messageService *messages.MessageService, hub *Hub) *Handler {
+func NewHandler(membershipService *memberships.MembershipService, messageService *messages.MessageService, hub *Hub, publisher messages.MessagePublisher) *Handler {
 	return &Handler{
 		membershipService: membershipService,
 		messageService:    messageService,
 		hub:               hub,
+		publisher:         publisher,
 	}
 }
 
@@ -64,5 +66,5 @@ func (h *Handler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	go client.WriteLoop()
-	client.ReadLoop(h.hub, channelID, h.messageService)
+	client.ReadLoop(h.hub, channelID, h.messageService, h.publisher)
 }

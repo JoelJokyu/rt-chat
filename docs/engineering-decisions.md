@@ -77,28 +77,32 @@ from local query-plan inspection and load testing, not a claim about
 production capacity. The measurements and limitations are in
 [database performance decisions](database-performance-decisions.md).
 
-## 6. Persist messages before broadcasting; keep the hub process-local
+## 6. Persist messages first; use Redis Pub/Sub for cross-instance fan-out
 
 For both WebSocket and HTTP writes, the message operation succeeds in
-PostgreSQL before the corresponding event is broadcast. Clients therefore
-receive the persisted message ID and can retrieve it from history. PostgreSQL
-remains durable storage; the in-memory hub only fans out live events.
+PostgreSQL before the corresponding event is published. The event contains the
+persisted message ID and timestamp, and PostgreSQL remains the durable source
+of truth. Redis Pub/Sub carries the event between API processes; each process
+has its own in-memory hub that queues events to its connected clients by
+channel. The publishing process also receives its event through its Redis
+subscription, so producers do not separately broadcast to the local hub.
 
-The hub groups connections by channel and queues outbound events per client.
-This supports one API process without an external messaging system. The
-trade-off is that connections on another API instance do not receive these
-broadcasts. Redis or another cross-instance mechanism is deferred until
-multiple instances become a real requirement. Clients reconnecting after
-disconnect use the paginated history endpoint to catch up; the current system
-does not replay missed WebSocket events.
+This was added after running two API instances showed that a process-local hub
+cannot reach clients connected to another process. Redis is used for transient
+fan-out, not as a message store or durable queue. Pub/Sub does not replay events
+to disconnected subscribers. If publishing fails after the PostgreSQL write,
+the application logs the failure; the message remains saved, but live clients
+may not see the change until they fetch history. Reliable event delivery would
+require a durable mechanism such as an outbox, which is outside the current
+scope.
 
 The full connection, persistence, broadcast, and disconnect sequence is in
 the [WebSocket message flow](websocket-message-flow.md).
 
 ## Scope boundary
 
-The current implementation is a single-instance backend, not a production
-deployment recipe. CORS, rate limiting, deployment-specific HTTPS settings,
-and cross-instance WebSocket fan-out are not implemented. Add these when a
-client or deployment requirement calls for them, rather than treating them as
-already solved architecture.
+The current implementation can run multiple API instances with Redis-backed
+WebSocket fan-out, but it is not a production deployment recipe. CORS, rate
+limiting, deployment-specific HTTPS settings, and durable event delivery are
+not implemented. Add these when a client or deployment requirement calls for
+them, rather than treating them as already solved architecture.

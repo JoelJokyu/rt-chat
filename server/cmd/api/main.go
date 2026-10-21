@@ -18,6 +18,8 @@ import (
 	"rtchat/internal/realtime"
 	"rtchat/internal/servers"
 	"rtchat/internal/users"
+
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -34,6 +36,28 @@ func main() {
 		return
 	}
 	defer db.Close()
+
+	redisAddr := os.Getenv("REDIS_ADDR")
+	if redisAddr == "" {
+		log.Printf("REDIS_ADDR is not set")
+		return
+	}
+
+	redisClient := redis.NewClient(&redis.Options{Addr: redisAddr})
+
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	err = redisClient.Ping(pingCtx).Err()
+	cancel()
+
+	if err != nil {
+		_ = redisClient.Close()
+		log.Printf("Redis startup failed: %v", err)
+		return
+	}
+	defer redisClient.Close()
+
+	log.Println("Connected to Redis")
+	eventBus := realtime.NewRedisEventBus(redisClient)
 
 	userRepository := users.NewUserRepository(db)
 	userService := users.NewUserService(userRepository)
@@ -54,7 +78,6 @@ func main() {
 
 	messageRepository := messages.NewMessageRepository(db)
 	messageService := messages.NewMessageService(messageRepository)
-	//messageHandler := messages.NewMessageHandler(messageService)
 
 	joinCodeRepository := joincodes.NewJoinCodeRepository(db)
 	joinCodeService := joincodes.NewJoinCodeService(joinCodeRepository)
@@ -66,8 +89,16 @@ func main() {
 
 	hub := realtime.NewHub()
 
-	messageHandler := messages.NewMessageHandler(messageService, hub)
-	realtimeHandler := realtime.NewHandler(membershipService, messageService, hub)
+	subscriberCtx, stopSubscriber := context.WithCancel(context.Background())
+	defer stopSubscriber()
+	go func() {
+		if err := eventBus.Subscribe(subscriberCtx, hub); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("Redis message subscription stopped: %v", err)
+		}
+	}()
+
+	messageHandler := messages.NewMessageHandler(messageService, eventBus)
+	realtimeHandler := realtime.NewHandler(membershipService, messageService, hub, eventBus)
 
 	mux := http.NewServeMux()
 	setupRoutes(mux, userHandler, authHandler, serverHandler, channelHandler, messageHandler, joinCodeHandler, membershipHandler, realtimeHandler, sessionService)

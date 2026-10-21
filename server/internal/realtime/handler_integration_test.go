@@ -89,7 +89,7 @@ func TestChatHandlerAuthenticationBroadcastPersistenceAndDisconnect(t *testing.T
 	hub := NewHub()
 	messageService := messages.NewMessageService(messages.NewMessageRepository(pool))
 	membershipService := memberships.NewMembershipService(memberships.NewMembershipRepository(pool))
-	handler := NewHandler(membershipService, messageService, hub)
+	handler := NewHandler(membershipService, messageService, hub, localHubPublisher{hub: hub})
 	mux := http.NewServeMux()
 	mux.Handle("GET /channels/{id}/ws", auth.AuthMiddleware(sessionService)(http.HandlerFunc(handler.ChatHandler)))
 	server := httptest.NewServer(mux)
@@ -160,6 +160,21 @@ func TestChatHandlerAuthenticationBroadcastPersistenceAndDisconnect(t *testing.T
 		t.Fatalf("close owner websocket: %v", err)
 	}
 	waitForHubClientCount(t, hub, channelID, 1)
+}
+
+// localHubPublisher models the Redis publish/subscribe round-trip for this
+// single-process integration test: publishing returns the event to the local hub.
+type localHubPublisher struct {
+	hub *Hub
+}
+
+func (p localHubPublisher) Publish(_ context.Context, payload []byte) error {
+	var event messages.MessageEvent
+	if err := json.Unmarshal(payload, &event); err != nil {
+		return err
+	}
+	p.hub.Broadcast(event.ChannelID, payload)
+	return nil
 }
 
 func openRealtimeTestPool(t *testing.T) *pgxpool.Pool {
